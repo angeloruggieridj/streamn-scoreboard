@@ -868,6 +868,63 @@ static void test_compound_adjust_phase_transition(void)
 	assert(p->phase2_tenths == 0);
 }
 
+static void test_compound_adjust_leftover_carries(void)
+{
+	/* Bug fix: when clock adjust causes phase1 to expire with leftover
+	   time, the leftover should carry into phase2.
+	   Example: 2+5 penalty with 30s left on phase1.  Subtract 1 minute.
+	   Phase1 has 300 tenths remaining.  Adjust -600 tenths (60s).
+	   remaining = 300 + (-600) = -300.  Leftover = -300.
+	   phase2 = 3000 (5 min).  New remaining = 3000 + (-300) = 2700.
+	   Phase2 should show 4:30, not 5:00. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(24, 30, 300);
+	/* Phase1 = 300 tenths (30s), phase2 = 3000 tenths (5min) */
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->remaining_tenths == 300);
+	assert(p->phase2_tenths == 3000);
+
+	/* Subtract 60 seconds — 30s more than phase1 has */
+	scoreboard_penalty_adjust(-600);
+	p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->phase2_tenths == 0);
+	/* 3000 + (-300) = 2700 tenths = 4:30 */
+	assert(p->remaining_tenths == 2700);
+}
+
+static void test_compound_adjust_leftover_clears_both(void)
+{
+	/* If the leftover exceeds phase2, the penalty clears entirely */
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(24, 10, 20);
+	/* Phase1 = 100 tenths (10s), phase2 = 200 tenths (20s) */
+
+	/* Subtract 60 seconds — exceeds both phases */
+	scoreboard_penalty_adjust(-600);
+	assert(scoreboard_get_home_penalty_count() == 0);
+}
+
+static void test_compound_adjust_away_leftover_carries(void)
+{
+	/* Same leftover carry for away team */
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(24, 30, 300);
+	scoreboard_penalty_adjust(-600);
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 2700);
+}
+
+static void test_compound_adjust_away_leftover_clears_both(void)
+{
+	/* Away compound penalty cleared when leftover exceeds phase2 */
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(24, 10, 20);
+	scoreboard_penalty_adjust(-600);
+	assert(scoreboard_get_away_penalty_count() == 0);
+}
+
 static void test_compound_away_phase_transition(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -982,6 +1039,256 @@ static void test_regular_penalty_has_zero_phase2(void)
 	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 0);
 }
 
+/* ---- penalty label format ---- */
+
+static void test_penalty_label_format_default(void)
+{
+	scoreboard_reset_state_for_tests();
+	const char *fmt = scoreboard_get_penalty_label_format();
+	assert(strstr(fmt, "{{ number }}") != NULL);
+	assert(strstr(fmt, "{{ time }}") != NULL);
+	assert(strstr(fmt, "{{ if_phase2 }}") != NULL);
+	assert(strstr(fmt, "{{ end_if }}") != NULL);
+}
+
+static void test_penalty_label_format_set_get(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format("{{ number }} - {{ time }}");
+	assert(strcmp(scoreboard_get_penalty_label_format(),
+		     "{{ number }} - {{ time }}") == 0);
+}
+
+static void test_format_penalty_labels_no_penalties(void)
+{
+	scoreboard_reset_state_for_tests();
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(buf[0] == '\0');
+}
+
+static void test_format_penalty_labels_one_penalty(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00") == 0);
+}
+
+static void test_format_penalty_labels_two_penalties(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	scoreboard_home_penalty_add(12, 270);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00\n#12  4:30") == 0);
+}
+
+static void test_format_penalty_labels_no_player_number(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(0, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* number is empty, so format produces "#  2:00" */
+	assert(strcmp(buf, "#  2:00") == 0);
+}
+
+static void test_format_penalty_labels_custom_format(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format("{{ number }} - {{ time }}");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "88 - 2:00") == 0);
+}
+
+static void test_format_penalty_labels_null_buf(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Should not crash */
+	scoreboard_format_penalty_labels(true, NULL, 0);
+	char buf[4];
+	scoreboard_format_penalty_labels(true, buf, 0);
+}
+
+static void test_format_penalty_labels_away(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(55, 300);
+	char buf[256];
+	scoreboard_format_penalty_labels(false, buf, sizeof(buf));
+	assert(strcmp(buf, "#55  5:00") == 0);
+}
+
+static void test_penalty_label_format_null(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(NULL);
+	/* Getter should return the default when internal is empty */
+	const char *fmt = scoreboard_get_penalty_label_format();
+	assert(strstr(fmt, "{{ number }}") != NULL);
+	assert(strstr(fmt, "{{ if_phase2 }}") != NULL);
+}
+
+static void test_format_penalty_labels_unterminated(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Truly unterminated {{ — no }} anywhere after it */
+	scoreboard_set_penalty_label_format("P{{ number }}={{ time");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* "P" + "88" + "=" + "{{ time" literal */
+	assert(strcmp(buf, "P88={{ time") == 0);
+}
+
+static void test_format_penalty_labels_small_buf(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	/* Buffer too small for expansion — truncates */
+	char buf[6];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strlen(buf) <= 5);
+}
+
+static void test_format_penalty_labels_overflow_lines(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	scoreboard_home_penalty_add(12, 300);
+	/* Buffer big enough for first line but not second */
+	char buf[12];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Only first penalty fits */
+	assert(strcmp(buf, "#88  2:00") == 0);
+}
+
+static void test_format_penalty_labels_compound(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }}  {{ time }}+{{ phase2 }}");
+	scoreboard_home_penalty_add_compound(88, 120, 600);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00+10:00") == 0);
+}
+
+static void test_format_penalty_labels_phase2_regular(void)
+{
+	/* Regular penalty — phase2 resolves to empty string */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }}  {{ time }}{{ phase2 }}");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00") == 0);
+}
+
+static void test_format_penalty_labels_if_phase2_compound(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }} {{ time }}"
+		"{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}");
+	scoreboard_home_penalty_add_compound(23, 120, 300);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#23 2:00 (+5:00)") == 0);
+}
+
+static void test_format_penalty_labels_if_phase2_regular(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }} {{ time }}"
+		"{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}");
+	scoreboard_home_penalty_add(23, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Regular penalty — if_phase2 block is skipped */
+	assert(strcmp(buf, "#23 2:00") == 0);
+}
+
+static void test_format_penalty_labels_if_phase2_no_end(void)
+{
+	/* Missing end_if — rest of template is skipped when phase2 empty */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }}{{ if_phase2 }} extra");
+	scoreboard_home_penalty_add(23, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#23") == 0);
+}
+
+static void test_format_penalty_labels_long_format(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Fill format to near max with literal text + variable */
+	scoreboard_set_penalty_label_format(
+		"AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC "
+		"DDDDDDDDDD EEEEEEEEEE {{ number }} {{ time }}");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[512];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Verify expansion works with long format */
+	assert(strstr(buf, "88") != NULL);
+	assert(strstr(buf, "2:00") != NULL);
+}
+
+static void test_format_penalty_labels_many_penalties(void)
+{
+	/* Fill all penalty slots to exercise the SCOREBOARD_MAX_RUNNING_PENALTIES
+	   limit inside format_penalty_labels — the third penalty should be
+	   excluded even if the buffer is large enough. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add(20, 120);
+	scoreboard_home_penalty_add(30, 120);
+	char buf[512];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Only 2 running penalties shown */
+	assert(strcmp(buf, "#10  2:00\n#20  2:00") == 0);
+}
+
+static void test_preview_penalty_label_default(void)
+{
+	scoreboard_reset_state_for_tests();
+	char buf[512];
+	scoreboard_preview_penalty_label(NULL, buf, sizeof(buf));
+	/* Line 1: regular penalty #23 1:30, no phase2 block */
+	assert(strstr(buf, "#23") != NULL);
+	assert(strstr(buf, "1:30") != NULL);
+	/* Line 2: compound penalty #88 0:45 with phase2 5:00 */
+	assert(strstr(buf, "#88") != NULL);
+	assert(strstr(buf, "0:45") != NULL);
+	assert(strstr(buf, "5:00") != NULL);
+}
+
+static void test_preview_penalty_label_custom(void)
+{
+	char buf[512];
+	scoreboard_preview_penalty_label(
+		"{{ number }} - {{ time }}", buf, sizeof(buf));
+	assert(strstr(buf, "23 - 1:30") != NULL);
+	assert(strstr(buf, "88 - 0:45") != NULL);
+}
+
+static void test_preview_penalty_label_null(void)
+{
+	/* Should not crash */
+	scoreboard_preview_penalty_label("test", NULL, 0);
+	char buf[4];
+	scoreboard_preview_penalty_label("test", buf, 0);
+}
+
 int main(void)
 {
 	test_home_penalty_add();
@@ -1065,6 +1372,10 @@ int main(void)
 	test_compound_holds_slot();
 	test_compound_clear_removes_both();
 	test_compound_adjust_phase_transition();
+	test_compound_adjust_leftover_carries();
+	test_compound_adjust_leftover_clears_both();
+	test_compound_adjust_away_leftover_carries();
+	test_compound_adjust_away_leftover_clears_both();
 	test_compound_away_phase_transition();
 	test_compound_away_adjust_transition();
 	test_compound_counts_as_one_running();
@@ -1076,6 +1387,31 @@ int main(void)
 	test_set_time_zero_compound_away_transitions();
 	test_set_time_zero_regular_still_clears();
 	test_regular_penalty_has_zero_phase2();
+
+	/* Penalty label format tests */
+	test_penalty_label_format_default();
+	test_penalty_label_format_set_get();
+	test_format_penalty_labels_no_penalties();
+	test_format_penalty_labels_one_penalty();
+	test_format_penalty_labels_two_penalties();
+	test_format_penalty_labels_no_player_number();
+	test_format_penalty_labels_custom_format();
+	test_format_penalty_labels_null_buf();
+	test_format_penalty_labels_away();
+	test_penalty_label_format_null();
+	test_format_penalty_labels_unterminated();
+	test_format_penalty_labels_small_buf();
+	test_format_penalty_labels_overflow_lines();
+	test_format_penalty_labels_compound();
+	test_format_penalty_labels_phase2_regular();
+	test_format_penalty_labels_if_phase2_compound();
+	test_format_penalty_labels_if_phase2_regular();
+	test_format_penalty_labels_if_phase2_no_end();
+	test_format_penalty_labels_long_format();
+	test_format_penalty_labels_many_penalties();
+	test_preview_penalty_label_default();
+	test_preview_penalty_label_custom();
+	test_preview_penalty_label_null();
 
 	printf("All scoreboard-core penalty tests passed.\n");
 	return 0;

@@ -22,6 +22,11 @@ enum scoreboard_clock_direction {
 	SCOREBOARD_CLOCK_COUNT_UP
 };
 
+enum scoreboard_game_clock_format {
+	SCOREBOARD_GAME_CLOCK_FORMAT_MMSS = 0, /* e.g. 75:30 */
+	SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS     /* e.g. 1:15:30 */
+};
+
 enum scoreboard_sport {
 	SCOREBOARD_SPORT_HOCKEY = 0,
 	SCOREBOARD_SPORT_BASKETBALL,
@@ -81,6 +86,16 @@ void scoreboard_set_clock_direction(enum scoreboard_clock_direction dir);
 enum scoreboard_clock_direction scoreboard_get_clock_direction(void);
 void scoreboard_set_period_length(int seconds);
 int scoreboard_get_period_length(void);
+
+/* Game clock (cumulative, counts up across all periods) */
+void scoreboard_set_game_clock_enabled(bool enabled);
+bool scoreboard_get_game_clock_enabled(void);
+int scoreboard_game_clock_get_tenths(void);
+void scoreboard_game_clock_format(char *buf, size_t size);
+void scoreboard_set_game_clock_display_format(
+	enum scoreboard_game_clock_format fmt);
+enum scoreboard_game_clock_format
+scoreboard_get_game_clock_display_format(void);
 
 /* Period */
 int scoreboard_get_period(void);
@@ -164,6 +179,7 @@ void scoreboard_decrement_away_fouls2(void);
 #define SCOREBOARD_MAX_RUNNING_PENALTIES 2
 #define SCOREBOARD_MAX_PERIOD_LABELS 16
 #define SCOREBOARD_PERIOD_LABEL_SIZE 16
+#define SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE 128
 
 /* Penalties (up to SCOREBOARD_MAX_PENALTIES per team) */
 int scoreboard_home_penalty_add(int player_number, int duration_secs);
@@ -189,6 +205,12 @@ void scoreboard_format_penalty_time(int slot, bool home, char *buf,
 				    size_t size);
 void scoreboard_format_all_penalty_numbers(bool home, char *buf, size_t size);
 void scoreboard_format_all_penalty_times(bool home, char *buf, size_t size);
+
+/* Penalty label format (combined number + time per line) */
+void scoreboard_set_penalty_label_format(const char *fmt);
+const char *scoreboard_get_penalty_label_format(void);
+void scoreboard_format_penalty_labels(bool home, char *buf, size_t size);
+void scoreboard_preview_penalty_label(const char *fmt, char *buf, size_t size);
 
 /* Dirty flag — true when internal state has changed since last write */
 bool scoreboard_is_dirty(void);

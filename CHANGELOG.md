@@ -4,6 +4,21 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-14
+
+### Added
+- Cumulative game clock — opt-in feature (Game Settings toggle) that counts up from 0:00 across the entire game, displayed under the period clock, written to `cumulative_clock.txt`, and used for event log timestamps when enabled (#12)
+- Cumulative clock format setting — choose between `MM:SS` (e.g. 75:30) and `H:MM:SS` (e.g. 1:15:30) in Game Settings
+- Combined penalty label files (`home_penalty_labels.txt`, `away_penalty_labels.txt`) with configurable format template including compound penalty support via `{{ if_phase2 }}` conditional; live preview in Game Settings (#14)
+- `period_length.txt` file written and read by the scoreboard core — enables external tools (reeln-cli) to set a custom period length that persists across "New Game" and period advance
+- `period_length.txt` added to the file watcher for automatic pickup of external changes
+
+### Fixed
+- "Game Finished" checkbox now resets when starting a new game — previously carried over from the prior game, causing the highlights button to show "Generate Game Highlights" instead of "Generate Period Highlights"
+- Penalty chapter markers now correctly name the penalized team instead of the opposing team, and use the label "Penalty:" instead of "Power Play:" (#13)
+- Clock adjustment on compound penalties now carries leftover time into phase 2 — previously a 60s subtraction on a 2+5 with 30s remaining would start phase 2 at 5:00 instead of the correct 4:30
+- Game Settings dialog no longer resets the clock when saving non-clock settings (e.g. penalty format, CLI path)
+
 ## [0.6.0] - 2026-04-08
 
 ### Added
