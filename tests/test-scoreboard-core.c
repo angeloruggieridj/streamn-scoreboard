@@ -995,6 +995,79 @@ static void test_game_clock_format_hmmss(void)
 	assert(strcmp(buf, "1:01:33") == 0);
 }
 
+static void test_game_clock_subsecond_sync(void)
+{
+	/* Cumulative clock must always satisfy:
+	   displayed_period + displayed_cumulative == period_length
+	   Before the fix, independent truncation of raw tenths caused a
+	   1-second discrepancy (GitHub issue #16).  The fix derives
+	   elapsed from the displayed period-clock seconds. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(1200); /* 20:00 countdown */
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+
+	/* Tick 1 tenth (clock_tenths 12000 → 11999).
+	   Period displays 11999/10 = 1199s = 19:59.
+	   Elapsed = (1200 - 1199) * 10 = 10 → cumulative 0:01.
+	   19:59 + 0:01 = 20:00 ✓ */
+	scoreboard_clock_tick(1);
+	assert(scoreboard_game_clock_get_tenths() == 10);
+
+	/* Tick 8 more (total 9, clock_tenths = 11991).
+	   Period still 11991/10 = 1199s = 19:59.
+	   Cumulative still 0:01.  19:59 + 0:01 = 20:00 ✓ */
+	scoreboard_clock_tick(8);
+	assert(scoreboard_game_clock_get_tenths() == 10);
+
+	/* Tick 1 more to cross the second boundary (total 10,
+	   clock_tenths = 11990).  Period 11990/10 = 1199s = 19:59.
+	   Still 0:01.  19:59 + 0:01 = 20:00 ✓ */
+	scoreboard_clock_tick(1);
+	assert(scoreboard_game_clock_get_tenths() == 10);
+
+	/* Tick 11 more (total 21, clock_tenths = 11979).
+	   Period 11979/10 = 1197s = 19:57.
+	   Elapsed = (1200 - 1197) * 10 = 30 → cumulative 0:03.
+	   19:57 + 0:03 = 20:00 ✓ */
+	scoreboard_clock_tick(11);
+	assert(scoreboard_game_clock_get_tenths() == 30);
+
+	/* Verify formatted strings: 19:57 + 0:03 = 20:00 */
+	char clock_buf[32], cum_buf[32];
+	scoreboard_clock_format(clock_buf, sizeof(clock_buf));
+	scoreboard_game_clock_format(cum_buf, sizeof(cum_buf));
+	assert(strcmp(clock_buf, "19:57") == 0);
+	assert(strcmp(cum_buf, "0:03") == 0);
+}
+
+static void test_game_clock_subsecond_sync_across_periods(void)
+{
+	/* Ensure the invariant holds across period boundaries when the
+	   clock is mid-second at period advance. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(60); /* 1:00 periods */
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+
+	/* Tick 5 tenths (clock_tenths 600 → 595).
+	   Period displays 595/10 = 59s = 0:59.
+	   Elapsed = (60 - 59) * 10 = 10.
+	   Period advance accumulates 10. */
+	scoreboard_clock_tick(5);
+	scoreboard_period_advance();
+
+	/* Period 2: tick 10 tenths (clock_tenths 600 → 590).
+	   Period displays 590/10 = 59s = 0:59.
+	   Elapsed = (60 - 59) * 10 = 10.
+	   Cumulative = 10 (accumulated) + 10 (current) = 20 → 0:02. */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(10);
+	assert(scoreboard_game_clock_get_tenths() == 20);
+}
+
 static void test_game_clock_format_mmss_over_hour(void)
 {
 	/* MM:SS format — minutes exceed 59 */
@@ -1102,6 +1175,8 @@ int main(void)
 	test_game_clock_format_null();
 	test_game_clock_format_disabled();
 	test_game_clock_format_hmmss();
+	test_game_clock_subsecond_sync();
+	test_game_clock_subsecond_sync_across_periods();
 	test_game_clock_format_mmss_over_hour();
 
 	printf("All scoreboard-core clock/period tests passed.\n");
