@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(streamn_obs_scoreboard VERSION 0.7.1 LANGUAGES C CXX)
+project(streamn_obs_scoreboard VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -419,6 +419,7 @@ add_core_test(scoreboard_core_penalties_tests tests/test-scoreboard-core-penalti
 add_core_test(scoreboard_core_persistence_tests tests/test-scoreboard-core-persistence.c)
 add_core_test(scoreboard_core_sport_tests tests/test-scoreboard-core-sport.c)
 add_core_test(scoreboard_core_events_tests tests/test-scoreboard-core-events.c)
+add_core_test(scoreboard_core_strength_tests tests/test-scoreboard-core-strength.c)
 
 if(BUILD_PLUGIN_MODULE)
   set(PLUGIN_BINARY_PATH "$<TARGET_FILE:streamn_obs_scoreboard>")
@@ -463,4 +464,9 @@ add_test(
 add_test(
   NAME scoreboard-core-events-tests
   COMMAND scoreboard_core_events_tests
+)
+
+add_test(
+  NAME scoreboard-core-strength-tests
+  COMMAND scoreboard_core_strength_tests
 )
