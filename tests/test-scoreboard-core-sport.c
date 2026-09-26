@@ -221,6 +221,107 @@ static void test_futsal_fouls_reset_at_second_half(void)
 	assert(strstr(logs, "accumulated fouls reset") != NULL);
 }
 
+static void test_futsal_fouls_restored_on_rewind(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_set_away_fouls(3);
+	scoreboard_period_advance(); /* -> 2nd half, fouls reset */
+	scoreboard_increment_home_fouls(); /* 2nd-half foul */
+	scoreboard_period_rewind(); /* back to 1st half */
+	assert(scoreboard_get_period() == 1);
+	assert(scoreboard_get_home_fouls() == 5);
+	assert(scoreboard_get_away_fouls() == 3);
+	char logs[4096];
+	scoreboard_copy_action_logs(logs, sizeof(logs));
+	assert(strstr(logs, "fouls restored") != NULL);
+
+	/* Advance again: current 1st-half counts are saved, reset again */
+	scoreboard_set_home_fouls(6);
+	scoreboard_period_advance();
+	assert(scoreboard_get_home_fouls() == 0);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 6);
+	assert(scoreboard_get_away_fouls() == 3);
+
+	/* Rewind from 1st half again: nothing saved, no change */
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 6);
+}
+
+static void test_futsal_rewind_from_extra_time_keeps_fouls(void)
+{
+	/* OT -> 2nd half is not a half-time boundary: keep counts */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(2);
+	scoreboard_period_advance(); /* 2nd half */
+	scoreboard_period_advance(); /* OT */
+	scoreboard_set_home_fouls(4);
+	scoreboard_period_rewind(); /* back to 2nd half */
+	assert(scoreboard_get_period() == 2);
+	assert(scoreboard_get_home_fouls() == 4);
+	scoreboard_period_rewind(); /* back to 1st: restore 1st-half value */
+	assert(scoreboard_get_home_fouls() == 2);
+}
+
+static void test_futsal_saved_fouls_cleared(void)
+{
+	/* New game discards the saved 1st-half counts */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_period_advance();
+	scoreboard_new_game();
+	scoreboard_set_period(2);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 0);
+
+	/* Switching sport discards them too */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_period_advance();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL); /* same sport: kept */
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_period(2);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 0);
+
+	/* Other sports never restore on rewind */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	scoreboard_set_home_fouls(3);
+	scoreboard_period_advance();
+	scoreboard_set_home_fouls(1);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 1);
+}
+
+static void test_futsal_saved_fouls_persist_json(void)
+{
+	char path[256];
+	make_tmp_file(path, sizeof(path));
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_set_away_fouls(2);
+	scoreboard_period_advance();
+	assert(scoreboard_save_state(path));
+
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(path));
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_period() == 2);
+	assert(scoreboard_get_home_fouls() == 0);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 5);
+	assert(scoreboard_get_away_fouls() == 2);
+	remove(path);
+}
+
 static void test_non_futsal_fouls_not_reset(void)
 {
 	/* Other sports keep their foul counts across periods */
@@ -864,6 +965,10 @@ int main(void)
 	test_set_sport_futsal();
 	test_futsal_clock_capped_at_20();
 	test_futsal_fouls_reset_at_second_half();
+	test_futsal_fouls_restored_on_rewind();
+	test_futsal_rewind_from_extra_time_keeps_fouls();
+	test_futsal_saved_fouls_cleared();
+	test_futsal_saved_fouls_persist_json();
 	test_non_futsal_fouls_not_reset();
 	test_set_sport_invalid();
 	test_sport_name_round_trip();

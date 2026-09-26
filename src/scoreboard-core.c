@@ -72,6 +72,11 @@ static struct {
 	int home_fouls2;
 	int away_fouls2;
 	char foul_label2[16];
+	/* Futsal: 1st-half fouls saved when they are reset at the start of
+	   the 2nd half, restored if the operator rewinds back to the 1st */
+	bool first_half_fouls_saved;
+	int first_half_home_fouls;
+	int first_half_away_fouls;
 	bool log_scores;
 	char score_label[16];
 
@@ -653,6 +658,9 @@ void scoreboard_period_advance(void)
 		   the 2nd-half count, so no reset after period 2. */
 		if (g_state.sport == SCOREBOARD_SPORT_FUTSAL &&
 		    g_state.period == 2) {
+			g_state.first_half_home_fouls = g_state.home_fouls;
+			g_state.first_half_away_fouls = g_state.away_fouls;
+			g_state.first_half_fouls_saved = true;
 			g_state.home_fouls = 0;
 			g_state.away_fouls = 0;
 			scoreboard_add_action_log(
@@ -673,6 +681,16 @@ void scoreboard_period_rewind(void)
 		}
 		g_state.period--;
 		scoreboard_clock_reset();
+		/* Futsal: undo the 2nd-half foul reset when going back to the
+		   1st half, restoring the counts from before the advance */
+		if (g_state.sport == SCOREBOARD_SPORT_FUTSAL &&
+		    g_state.period == 1 && g_state.first_half_fouls_saved) {
+			g_state.home_fouls = g_state.first_half_home_fouls;
+			g_state.away_fouls = g_state.first_half_away_fouls;
+			g_state.first_half_fouls_saved = false;
+			scoreboard_add_action_log(
+				"Futsal: 1st-half accumulated fouls restored");
+		}
 		mark_dirty();
 	}
 }
@@ -2039,6 +2057,12 @@ bool scoreboard_save_state(const char *path)
 	fprintf(f, "  \"away_fouls\": %d,\n", g_state.away_fouls);
 	fprintf(f, "  \"home_fouls2\": %d,\n", g_state.home_fouls2);
 	fprintf(f, "  \"away_fouls2\": %d,\n", g_state.away_fouls2);
+	fprintf(f, "  \"first_half_fouls_saved\": %s,\n",
+		g_state.first_half_fouls_saved ? "true" : "false");
+	fprintf(f, "  \"first_half_home_fouls\": %d,\n",
+		g_state.first_half_home_fouls);
+	fprintf(f, "  \"first_half_away_fouls\": %d,\n",
+		g_state.first_half_away_fouls);
 	write_json_string(f, "sport", scoreboard_sport_name(g_state.sport),
 			  false);
 	fprintf(f, "  \"base_strength\": %d,\n", g_state.base_strength);
@@ -2166,6 +2190,13 @@ bool scoreboard_load_state(const char *path)
 		parse_json_int(json, "home_fouls2", g_state.home_fouls2);
 	g_state.away_fouls2 =
 		parse_json_int(json, "away_fouls2", g_state.away_fouls2);
+	g_state.first_half_fouls_saved = parse_json_bool(
+		json, "first_half_fouls_saved",
+		g_state.first_half_fouls_saved);
+	g_state.first_half_home_fouls = parse_json_int(
+		json, "first_half_home_fouls", g_state.first_half_home_fouls);
+	g_state.first_half_away_fouls = parse_json_int(
+		json, "first_half_away_fouls", g_state.first_half_away_fouls);
 	g_state.base_strength =
 		parse_json_int(json, "base_strength", g_state.base_strength);
 	parse_json_string(json, "strength_label_format",
@@ -2237,6 +2268,9 @@ void scoreboard_new_game(void)
 	g_state.away_fouls = 0;
 	g_state.home_fouls2 = 0;
 	g_state.away_fouls2 = 0;
+	g_state.first_half_fouls_saved = false;
+	g_state.first_half_home_fouls = 0;
+	g_state.first_half_away_fouls = 0;
 	g_state.period = 1;
 	g_state.clock_running = false;
 
@@ -2297,6 +2331,8 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 	if (sport < 0 || sport >= SCOREBOARD_SPORT_COUNT)
 		sport = SCOREBOARD_SPORT_HOCKEY;
 	const struct scoreboard_sport_preset *p = &k_sport_presets[sport];
+	if (sport != g_state.sport)
+		g_state.first_half_fouls_saved = false;
 	g_state.sport = sport;
 	safe_copy(g_state.segment_name, p->segment_name,
 		  sizeof(g_state.segment_name));
