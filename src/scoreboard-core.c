@@ -648,6 +648,16 @@ void scoreboard_period_advance(void)
 				current_period_elapsed_tenths();
 		g_state.period++;
 		scoreboard_clock_reset();
+		/* Futsal: accumulated team fouls are counted per half, so they
+		   reset when the 2nd half starts. Extra time (OT) continues
+		   the 2nd-half count, so no reset after period 2. */
+		if (g_state.sport == SCOREBOARD_SPORT_FUTSAL &&
+		    g_state.period == 2) {
+			g_state.home_fouls = 0;
+			g_state.away_fouls = 0;
+			scoreboard_add_action_log(
+				"Futsal: accumulated fouls reset for 2nd half");
+		}
 		mark_dirty();
 	}
 }
