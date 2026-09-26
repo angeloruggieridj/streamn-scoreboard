@@ -4,6 +4,13 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Futsal sport preset — two 20:00 halves with a count-down clock, accumulated team fouls counter, and two extra-time halves (OT, OT2)
+- Dock Colors in Game Settings — choose custom colors for the score and foul counters in the dock (the theme accent color can be hard to read); saved per OBS profile, with a "Default" button to restore the theme color
+
+### Changed
+- Clock +/- minute and second buttons (and hotkeys) no longer push the clock above the configured segment length (e.g. a 20:00 count-down stays capped at 20:00); running penalties only move by the time actually added
+
 ## [0.8.0] - 2026-04-17
 
 ### Added
