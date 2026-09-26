@@ -58,6 +58,7 @@ struct scoreboard_sport_preset {
 	int default_major_penalty_secs;
 	int base_strength;
 	int min_strength;
+	bool pad_clock_minutes; /* show "09:00" instead of "9:00" */
 };
 
 struct scoreboard_penalty {
@@ -84,6 +85,9 @@ void scoreboard_clock_set_tenths(int tenths);
 void scoreboard_clock_adjust_seconds(int delta);
 void scoreboard_clock_adjust_minutes(int delta);
 void scoreboard_clock_format(char *buf, size_t size);
+/* Leading zero on single-digit minutes ("09:00" vs "9:00") */
+void scoreboard_set_clock_pad_minutes(bool enabled);
+bool scoreboard_get_clock_pad_minutes(void);
 
 void scoreboard_set_clock_direction(enum scoreboard_clock_direction dir);
 enum scoreboard_clock_direction scoreboard_get_clock_direction(void);

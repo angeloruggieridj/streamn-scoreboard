@@ -15,15 +15,15 @@
 #define SCOREBOARD_SEGMENT_NAME_SIZE 16
 
 static const struct scoreboard_sport_preset k_sport_presets[SCOREBOARD_SPORT_COUNT] = {
-	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs, base_strength, min_strength */
-	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300, 5,  3},
-	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0,   0,  0},
-	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0,   11, 7},
-	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0,   0,  0},
-	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180, 5,  3},
-	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600, 15, 13},
-	{SCOREBOARD_SPORT_FUTSAL,     "Half",    2, 1200, 2, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", true,  "Goal",  0,   0,   0,  0},
-	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300, 0,  0},
+	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs, base_strength, min_strength, pad_clock_minutes */
+	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300, 5,  3, false},
+	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0,   0,  0, false},
+	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0,   11, 7, false},
+	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0,   0,  0, false},
+	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180, 5,  3, false},
+	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600, 15, 13, false},
+	{SCOREBOARD_SPORT_FUTSAL,     "Half",    2, 1200, 2, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", true,  "Goal",  0,   0,   0,  0, true},
+	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300, 0,  0, false},
 };
 
 static struct {
@@ -36,6 +36,8 @@ static struct {
 	int game_clock_accumulated_tenths;
 	bool game_clock_started;
 	enum scoreboard_game_clock_format game_clock_display_format;
+
+	bool clock_pad_minutes;
 
 	int period;
 	bool overtime_enabled;
@@ -532,7 +534,19 @@ void scoreboard_clock_format(char *buf, size_t size)
 	int total_seconds = g_state.clock_tenths / 10;
 	int minutes = total_seconds / 60;
 	int seconds = total_seconds % 60;
-	snprintf(buf, size, "%d:%02d", minutes, seconds);
+	snprintf(buf, size, g_state.clock_pad_minutes ? "%02d:%02d" : "%d:%02d",
+		 minutes, seconds);
+}
+
+void scoreboard_set_clock_pad_minutes(bool enabled)
+{
+	g_state.clock_pad_minutes = enabled;
+	mark_dirty();
+}
+
+bool scoreboard_get_clock_pad_minutes(void)
+{
+	return g_state.clock_pad_minutes;
 }
 
 void scoreboard_set_clock_direction(enum scoreboard_clock_direction dir)
@@ -2041,6 +2055,8 @@ bool scoreboard_save_state(const char *path)
 		g_state.game_clock_accumulated_tenths);
 	fprintf(f, "  \"game_clock_started\": %s,\n",
 		g_state.game_clock_started ? "true" : "false");
+	fprintf(f, "  \"clock_pad_minutes\": %s,\n",
+		g_state.clock_pad_minutes ? "true" : "false");
 	fprintf(f, "  \"game_clock_display_format\": %d,\n",
 		(int)g_state.game_clock_display_format);
 	write_json_string(f, "penalty_label_format",
@@ -2156,6 +2172,8 @@ bool scoreboard_load_state(const char *path)
 		g_state.game_clock_accumulated_tenths);
 	g_state.game_clock_started = parse_json_bool(
 		json, "game_clock_started", g_state.game_clock_started);
+	g_state.clock_pad_minutes = parse_json_bool(
+		json, "clock_pad_minutes", g_state.clock_pad_minutes);
 	g_state.game_clock_display_format =
 		(enum scoreboard_game_clock_format)parse_json_int(
 			json, "game_clock_display_format",
@@ -2359,6 +2377,7 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 			p->default_major_penalty_secs;
 	g_state.base_strength = p->base_strength;
 	g_state.min_strength = p->min_strength;
+	g_state.clock_pad_minutes = p->pad_clock_minutes;
 	generate_default_period_labels();
 	mark_dirty();
 }

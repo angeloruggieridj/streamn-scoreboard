@@ -183,6 +183,60 @@ static void test_set_sport_futsal(void)
 	       SCOREBOARD_SPORT_FUTSAL);
 }
 
+static void test_futsal_pads_minutes_by_default(void)
+{
+	char buf[16];
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_clock_pad_minutes() == true);
+	scoreboard_clock_set_tenths(5400);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "09:00") == 0);
+	/* User can turn it off */
+	scoreboard_set_clock_pad_minutes(false);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "9:00") == 0);
+	/* Other sports default to off */
+	scoreboard_set_sport(SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_clock_pad_minutes() == false);
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_clock_pad_minutes() == true);
+}
+
+static void test_clock_pad_minutes_persist(void)
+{
+	char path[256];
+	char dir[256];
+	char buf[16];
+	make_tmp_file(path, sizeof(path));
+	/* JSON: explicit value overrides the sport default */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_clock_pad_minutes(false);
+	assert(scoreboard_save_state(path));
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(path));
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_clock_pad_minutes() == false);
+	remove(path);
+
+	/* Text files: padded clock.txt reads back correctly */
+	make_tmp_dir(dir, sizeof(dir));
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(dir);
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_clock_set_tenths(5430); /* 09:03 */
+	assert(scoreboard_write_all_files());
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(dir);
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_clock_get_tenths() == 5430);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "09:03") == 0);
+	cleanup_dir(dir);
+}
+
 static void test_futsal_clock_capped_at_20(void)
 {
 	/* Arrow adjustments cannot exceed the 20:00 half length */
@@ -963,6 +1017,8 @@ int main(void)
 	test_set_sport_lacrosse();
 	test_set_sport_generic();
 	test_set_sport_futsal();
+	test_futsal_pads_minutes_by_default();
+	test_clock_pad_minutes_persist();
 	test_futsal_clock_capped_at_20();
 	test_futsal_fouls_reset_at_second_half();
 	test_futsal_fouls_restored_on_rewind();

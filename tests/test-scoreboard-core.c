@@ -157,6 +157,34 @@ static void test_clock_format(void)
 	assert(strcmp(buf, "0:00") == 0);
 }
 
+static void test_clock_format_pad_minutes(void)
+{
+	scoreboard_reset_state_for_tests();
+	char buf[16];
+	/* Default: no leading zero */
+	assert(scoreboard_get_clock_pad_minutes() == false);
+	scoreboard_clock_set_tenths(5400); /* 9:00 */
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "9:00") == 0);
+
+	scoreboard_set_clock_pad_minutes(true);
+	assert(scoreboard_get_clock_pad_minutes() == true);
+	assert(scoreboard_is_dirty());
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "09:00") == 0);
+	scoreboard_clock_set_tenths(50); /* 0:05 */
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "00:05") == 0);
+	scoreboard_clock_set_tenths(12000); /* 20:00 unchanged */
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "20:00") == 0);
+
+	scoreboard_set_clock_pad_minutes(false);
+	scoreboard_clock_set_tenths(5400);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "9:00") == 0);
+}
+
 static void test_clock_format_null(void)
 {
 	scoreboard_clock_format(NULL, 0);
@@ -1173,6 +1201,7 @@ int main(void)
 	test_clock_reset_countup();
 	test_clock_set_tenths_negative();
 	test_clock_format();
+	test_clock_format_pad_minutes();
 	test_clock_format_null();
 	test_clock_adjust_seconds();
 	test_clock_adjust_seconds_floor();

@@ -69,6 +69,7 @@ const char *kGameClockFormatKey = "game_clock_format";
 const char *kPenaltyLabelFormatKey = "penalty_label_format";
 const char *kScoreColorKey = "score_color";
 const char *kFoulsColorKey = "fouls_color";
+const char *kClockPadMinutesKey = "clock_pad_minutes";
 
 struct process_job {
 	int id = 0;
@@ -1288,6 +1289,21 @@ void apply_value_colors()
 	}
 }
 
+/* Re-applies the saved "two-digit minutes" choice from the profile.
+   Needed after anything that calls scoreboard_set_sport() (e.g. reading
+   sport.txt), since that resets the option to the sport's default. When
+   the user has never saved a choice, the sport default is kept. */
+void apply_saved_clock_pad_minutes()
+{
+	config_t *profile_cfg = obs_frontend_get_profile_config();
+	if (profile_cfg == nullptr ||
+	    !config_has_user_value(profile_cfg, kConfigSection,
+				   kClockPadMinutesKey))
+		return;
+	scoreboard_set_clock_pad_minutes(config_get_bool(
+		profile_cfg, kConfigSection, kClockPadMinutesKey));
+}
+
 /* ---- Profile paths ---- */
 
 void load_profile_paths()
@@ -1328,6 +1344,7 @@ void load_profile_paths()
 			profile_cfg, kConfigSection, kFoulsColorKey);
 		g_fouls_color = sanitize_color(fouls_color);
 	}
+	apply_saved_clock_pad_minutes();
 
 	scoreboard_set_output_directory(output_dir);
 	scoreboard_set_cli_executable(cli_exe);
@@ -1363,6 +1380,8 @@ void save_profile_paths()
 			  g_score_color.toUtf8().constData());
 	config_set_string(profile_cfg, kConfigSection, kFoulsColorKey,
 			  g_fouls_color.toUtf8().constData());
+	config_set_bool(profile_cfg, kConfigSection, kClockPadMinutesKey,
+			scoreboard_get_clock_pad_minutes());
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1685,6 +1704,14 @@ void open_clock_settings_dialog(QWidget *parent)
 		down_btn->setChecked(false);
 	});
 
+	QCheckBox *pad_minutes_check = new QCheckBox(
+		"Two-digit minutes (09:00 instead of 9:00)", &dialog);
+	pad_minutes_check->setChecked(scoreboard_get_clock_pad_minutes());
+	pad_minutes_check->setToolTip(
+		"Adds a leading zero to the clock when minutes are below 10.\n"
+		"Applies to clock.txt and the dock. On by default for futsal.");
+	layout->addWidget(pad_minutes_check);
+
 	QLabel *pen_dur_label =
 		new QLabel("Minor penalty (seconds):", &dialog);
 	QHBoxLayout *pen_dur_row = new QHBoxLayout();
@@ -1810,16 +1837,17 @@ void open_clock_settings_dialog(QWidget *parent)
 		bool has_penalties;
 		bool has_fouls;
 		int base_strength;
+		bool pad_minutes;
 	};
 	static const sport_ui_info k_sport_ui[SCOREBOARD_SPORT_COUNT] = {
-		{15, true, true, false, 5},    /* hockey */
-		{8, true, false, true, 0},     /* basketball */
-		{45, false, false, true, 11},  /* soccer */
-		{30, true, false, true, 0},    /* football */
-		{12, true, true, false, 5},    /* lacrosse */
-		{40, false, true, false, 15},  /* rugby */
-		{20, true, false, true, 0},    /* futsal */
-		{0, false, false, false, 0},   /* generic */
+		{15, true, true, false, 5, false},    /* hockey */
+		{8, true, false, true, 0, false},     /* basketball */
+		{45, false, false, true, 11, false},  /* soccer */
+		{30, true, false, true, 0, false},    /* football */
+		{12, true, true, false, 5, false},    /* lacrosse */
+		{40, false, true, false, 15, false},  /* rugby */
+		{20, true, false, true, 0, true},    /* futsal */
+		{0, false, false, false, 0, false},   /* generic */
 	};
 
 	/* Update dialog fields when sport changes */
@@ -1830,7 +1858,7 @@ void open_clock_settings_dialog(QWidget *parent)
 		 pen_label_label, pen_label_input,
 		 pen_preview_label, strength_spin, strength_label,
 		 str_label_header, str_label_label, str_label_input,
-		 str_preview_label](int index) {
+		 str_preview_label, pad_minutes_check](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
 			const sport_ui_info &info = k_sport_ui[index];
@@ -1860,6 +1888,7 @@ void open_clock_settings_dialog(QWidget *parent)
 			str_preview_label->setVisible(show_strength);
 			if (show_strength)
 				strength_spin->setValue(info.base_strength);
+			pad_minutes_check->setChecked(info.pad_minutes);
 		});
 
 	/* Period labels button */
@@ -2091,6 +2120,8 @@ void open_clock_settings_dialog(QWidget *parent)
 			scoreboard_set_sport(
 				(enum scoreboard_sport)sport_idx);
 		scoreboard_set_period_length(len_spin->value() * 60);
+		scoreboard_set_clock_pad_minutes(
+			pad_minutes_check->isChecked());
 		scoreboard_set_clock_direction(
 			down_btn->isChecked() ? SCOREBOARD_CLOCK_COUNT_DOWN
 					      : SCOREBOARD_CLOCK_COUNT_UP);
@@ -2905,6 +2936,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	scoreboard_reset_state_for_tests();
 	load_profile_paths();
 	scoreboard_read_all_files();
+	apply_saved_clock_pad_minutes();
 
 	/* Detect OBS 32+ recording chapter API at runtime for backwards
 	   compatibility.  These symbols only exist in obs-frontend-api 32+. */
