@@ -11,6 +11,13 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 - Dock Colors in Game Settings — choose custom colors for the score and foul counters in the dock (the theme accent color can be hard to read); saved per OBS profile, with a "Default" button to restore the theme color
 
 ### Fixed
+- Editing a penalty while the clock runs could change another player's penalty if the one being edited expired meanwhile; the edit now follows the same player, or is discarded if their penalty has ended
+- Switching sport in Game Settings now also sets that sport's default penalty durations (they kept the previous sport's values); penalty fields are hidden on open for sports without penalties
+- Pressing OK in Game Settings no longer rounds a non-whole-minute segment length (e.g. set via `period_length.txt`) and resets the clock
+- An external edit of any output file no longer makes a running clock jump back by up to 0.9 s
+- Changing the output directory now writes all files there immediately; files created later (first run, game clock enabled) are also watched for external edits
+- CLI jobs: cancelling shows "cancelled" instead of "failed"; arguments in quotes are kept together (`--title "Home vs Away"`); clearing or shutting down no longer leaves process callbacks pointing at freed memory
+- Period rewind (button and hotkey) is no longer possible while the clock runs, and the button asks for confirmation mid-period, like advance
 - OBS no longer crashes on quit (seen on macOS with OBS 32): the dock's update timer, file watcher and CLI processes are now tracked with guarded pointers, so shutdown no longer touches objects OBS has already destroyed
 - Release builds now show the release tag's version in the dock header, About dialog and plugin manager (previously always the version from `CMakeLists.txt`); set with `-DPLUGIN_VERSION_OVERRIDE`
 
