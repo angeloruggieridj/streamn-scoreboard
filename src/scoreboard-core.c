@@ -1985,7 +1985,11 @@ bool scoreboard_read_all_files(void)
 
 	if (read_text_file(dir, "clock.txt", buf, sizeof(buf))) {
 		int tenths = parse_clock_text(buf);
-		if (tenths >= 0)
+		/* clock.txt only has whole seconds. If it shows the same second
+		   we are already at, keep our tenths: adopting the file value
+		   would make a running clock jump back by up to 0.9 s every
+		   time any output file is edited externally. */
+		if (tenths >= 0 && tenths / 10 != g_state.clock_tenths / 10)
 			g_state.clock_tenths = tenths;
 	} else {
 		ok = false;

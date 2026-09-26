@@ -88,6 +88,7 @@ struct process_job {
 	QString stderr_log;
 	bool running = false;
 	bool completed = false;
+	bool cancelled = false;
 };
 
 struct penalty_row_widgets {
@@ -478,19 +479,24 @@ void start_job_process(process_job *job, const QStringList &args)
 	QObject::connect(
 		job->process, &QProcess::errorOccurred,
 		[job](QProcess::ProcessError error) {
+			/* Only a failed start is terminal here; for crashes,
+			   kills and I/O errors finished() follows and reports
+			   the final status. */
+			if (error != QProcess::FailedToStart)
+				return;
 			capture_remaining_process_output(job);
-			QString status = "failed to start";
-			if (error == QProcess::FailedToStart)
-				status =
-					"failed to start (check CLI executable)";
-			complete_job(job, status);
+			complete_job(job,
+				     "failed to start (check CLI executable)");
 		});
 	QObject::connect(
 		job->process,
 		qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
 		[job](int exit_code, QProcess::ExitStatus status) {
 			capture_remaining_process_output(job);
-			if (status == QProcess::NormalExit && exit_code == 0) {
+			if (job->cancelled) {
+				complete_job(job, "cancelled");
+			} else if (status == QProcess::NormalExit &&
+				   exit_code == 0) {
 				complete_job(job, "completed");
 			} else {
 				complete_job(
@@ -542,6 +548,7 @@ void add_job_row(const QString &title, const QStringList &args)
 			 [job]() { copy_job_logs(job); });
 	QObject::connect(job->cancel, &QPushButton::clicked, [job]() {
 		if (job->process && job->running) {
+			job->cancelled = true;
 			job->text->setText(job->title +
 					   QString(" - cancelling"));
 			job->cancel->setEnabled(false);
@@ -555,6 +562,21 @@ void add_job_row(const QString &title, const QStringList &args)
 }
 
 
+/* Detach a job's process before the job struct is deleted: its signal
+   handlers capture the raw job pointer, so any signal emitted afterwards
+   (e.g. finished() while the process is torn down) would touch freed
+   memory. */
+void release_job_process(process_job *job)
+{
+	if (!job || !job->process)
+		return;
+	QObject::disconnect(job->process, nullptr, nullptr, nullptr);
+	if (job->running)
+		job->process->kill();
+	job->process->deleteLater();
+	job->process = nullptr;
+}
+
 void clear_completed_jobs()
 {
 	QVector<process_job *> remaining;
@@ -567,8 +589,7 @@ void clear_completed_jobs()
 				job->row->hide();
 				job->row->deleteLater();
 			}
-			if (job->process)
-				job->process->deleteLater();
+			release_job_process(job);
 			delete job;
 		} else {
 			remaining.push_back(job);
@@ -829,6 +850,13 @@ void update_copy_timestamps_visibility()
 	g_copy_timestamps_btn->setVisible(false);
 }
 
+/* Split user CLI arguments like a shell would, so quoted values with
+   spaces ("--title \"Home vs Away\"") stay one argument. */
+QStringList split_cli_args(const QString &text)
+{
+	return QProcess::splitCommand(text);
+}
+
 void run_reeln_segment_command()
 {
 	const QString executable =
@@ -839,7 +867,7 @@ void run_reeln_segment_command()
 		QString::fromUtf8(scoreboard_get_cli_extra_args()).trimmed();
 	QStringList extra_parts;
 	if (!extra.isEmpty())
-		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
+		extra_parts = split_cli_args(extra);
 
 	int period = scoreboard_get_period();
 	char period_buf[64];
@@ -863,7 +891,7 @@ void run_reeln_highlights_command()
 		QString::fromUtf8(scoreboard_get_cli_extra_args()).trimmed();
 	QStringList extra_parts;
 	if (!extra.isEmpty())
-		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
+		extra_parts = split_cli_args(extra);
 
 	log_game_end_event();
 	QStringList args;
@@ -1225,6 +1253,25 @@ void rebuild_file_watcher()
 	}
 }
 
+/* Adds watched files that exist on disk but are not watched yet */
+void watch_missing_files()
+{
+	if (!g_file_watcher)
+		return;
+	const char *dir = scoreboard_get_output_directory();
+	if (dir[0] == '\0')
+		return;
+	const QStringList watched = g_file_watcher->files();
+	if (watched.size() >= kWatchedFileCount)
+		return;
+	const QString base = QString::fromUtf8(dir);
+	for (int i = 0; i < kWatchedFileCount; i++) {
+		const QString path = base + "/" + kWatchedFiles[i];
+		if (!watched.contains(path) && QFile::exists(path))
+			g_file_watcher->addPath(path);
+	}
+}
+
 void on_file_changed(const QString &path)
 {
 	if (g_write_cooldown.isValid() &&
@@ -1244,6 +1291,15 @@ void write_files_now()
 {
 	scoreboard_write_all_files();
 	g_write_cooldown.restart();
+	/* Files that did not exist when the watcher was built (first run,
+	   new folder, game clock just enabled) are picked up once they have
+	   been written. Checked at most every 5 s to keep ticks cheap. */
+	static QElapsedTimer s_last_watch_check;
+	if (g_file_watcher && (!s_last_watch_check.isValid() ||
+			       s_last_watch_check.elapsed() > 5000)) {
+		s_last_watch_check.restart();
+		watch_missing_files();
+	}
 }
 
 void on_tick()
@@ -1574,6 +1630,10 @@ void open_edit_penalty_dialog(QWidget *parent, bool home, int slot)
 	QVBoxLayout *layout = new QVBoxLayout(&dialog);
 
 	int current_secs = p->remaining_tenths / 10;
+	/* The clock keeps running while this modal dialog is open: the
+	   penalty may expire and the slots may be compacted, so remember
+	   which player it was and find it again on OK. */
+	const int player_number = p->player_number;
 
 	QHBoxLayout *dur_row = new QHBoxLayout();
 	dur_row->addWidget(new QLabel("Remaining (sec):", &dialog));
@@ -1592,11 +1652,29 @@ void open_edit_penalty_dialog(QWidget *parent, bool home, int slot)
 	layout->addWidget(buttons);
 
 	if (dialog.exec() == QDialog::Accepted) {
+		int target = -1;
+		for (int i = 0; i < SCOREBOARD_MAX_PENALTIES; i++) {
+			const struct scoreboard_penalty *cur =
+				home ? scoreboard_get_home_penalty(i)
+				     : scoreboard_get_away_penalty(i);
+			if (cur && cur->active &&
+			    cur->player_number == player_number) {
+				target = i;
+				if (i == slot)
+					break; /* prefer the original slot */
+			}
+		}
+		if (target < 0) {
+			log_info("[streamn-obs-scoreboard] penalty ended "
+				 "while editing — edit discarded");
+			update_all_labels();
+			return;
+		}
 		if (home)
-			scoreboard_home_penalty_set_time(slot,
+			scoreboard_home_penalty_set_time(target,
 							 dur_spin->value());
 		else
-			scoreboard_away_penalty_set_time(slot,
+			scoreboard_away_penalty_set_time(target,
 							 dur_spin->value());
 		write_files_now();
 		update_all_labels();
@@ -1645,6 +1723,10 @@ void open_configure_dialog(QWidget *parent)
 		scoreboard_set_output_directory(
 			out_input->text().trimmed().toUtf8().constData());
 		save_profile_paths();
+		/* Populate the new folder right away (otherwise it stays
+		   empty until something changes), then watch the files */
+		scoreboard_mark_dirty();
+		write_files_now();
 		rebuild_file_watcher();
 		update_all_labels();
 	}
@@ -1881,6 +1963,12 @@ void open_clock_settings_dialog(QWidget *parent)
 				up_btn->setChecked(true);
 				down_btn->setChecked(false);
 			}
+			if (preset->default_penalty_secs > 0)
+				pen_dur_spin->setValue(
+					preset->default_penalty_secs);
+			if (preset->default_major_penalty_secs > 0)
+				major_pen_dur_spin->setValue(
+					preset->default_major_penalty_secs);
 			pen_dur_label->setVisible(preset->has_penalties);
 			pen_dur_spin->setVisible(preset->has_penalties);
 			major_pen_dur_label->setVisible(preset->has_penalties);
@@ -1900,6 +1988,21 @@ void open_clock_settings_dialog(QWidget *parent)
 				strength_spin->setValue(preset->base_strength);
 			pad_minutes_check->setChecked(preset->pad_clock_minutes);
 		});
+
+	/* Initial visibility of the penalty fields for the current sport
+	   (the handler above only runs when the selection changes) */
+	{
+		const bool has_pen = scoreboard_get_has_penalties();
+		pen_dur_label->setVisible(has_pen);
+		pen_dur_spin->setVisible(has_pen);
+		major_pen_dur_label->setVisible(has_pen);
+		major_pen_dur_spin->setVisible(has_pen);
+		pen_label_header->setVisible(has_pen);
+		pen_label_label->setVisible(has_pen);
+		pen_label_input->setVisible(has_pen);
+		pen_preview_label->setVisible(has_pen);
+	}
+	const int initial_len_minutes = len_spin->value();
 
 	/* Period labels button */
 	QHBoxLayout *labels_row = new QHBoxLayout();
@@ -2125,11 +2228,19 @@ void open_clock_settings_dialog(QWidget *parent)
 
 	if (dialog.exec() == QDialog::Accepted) {
 		int sport_idx = sport_combo->currentIndex();
-		if (sport_idx >= 0 && sport_idx < SCOREBOARD_SPORT_COUNT &&
-		    sport_idx != (int)scoreboard_get_sport())
+		const bool sport_changed =
+			sport_idx >= 0 && sport_idx < SCOREBOARD_SPORT_COUNT &&
+			sport_idx != (int)scoreboard_get_sport();
+		if (sport_changed)
 			scoreboard_set_sport(
 				(enum scoreboard_sport)sport_idx);
-		scoreboard_set_period_length(len_spin->value() * 60);
+		/* The spin box only holds whole minutes: apply it only when
+		   it was changed (by the user or a sport switch), so a
+		   non-minute length (e.g. from period_length.txt) is not
+		   rounded and the clock is not reset just by pressing OK */
+		if (sport_changed ||
+		    len_spin->value() != initial_len_minutes)
+			scoreboard_set_period_length(len_spin->value() * 60);
 		scoreboard_set_clock_pad_minutes(
 			pad_minutes_check->isChecked());
 		scoreboard_set_clock_direction(
@@ -2369,8 +2480,12 @@ void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_period_rewind();
+	if (!pressed)
+		return;
+	/* Same rule as advance: never while the clock is running */
+	if (scoreboard_clock_is_running())
+		return;
+	scoreboard_period_rewind();
 }
 
 void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -3553,6 +3668,11 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		update_all_labels();
 	});
 	QObject::connect(period_rew_btn, &QPushButton::clicked, []() {
+		/* Rewinding resets the clock: guard it like advance */
+		if (scoreboard_clock_is_running() ||
+		    !confirm_mid_period_action(g_dock_widget,
+					       "go back to the previous period"))
+			return;
 		scoreboard_period_rewind();
 		update_all_labels();
 	});
@@ -3815,10 +3935,7 @@ void scoreboard_dock_shutdown(void)
 	for (process_job *job : g_jobs) {
 		if (!job)
 			continue;
-		if (job->process && job->running)
-			job->process->kill();
-		if (job->process)
-			job->process->deleteLater();
+		release_job_process(job);
 		delete job;
 	}
 	g_jobs.clear();

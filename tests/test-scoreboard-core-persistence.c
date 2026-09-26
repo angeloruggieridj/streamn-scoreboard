@@ -152,6 +152,25 @@ static void test_write_failure_invalidates_cache(void)
 	cleanup_tmp_dir();
 }
 
+static void test_read_keeps_clock_tenths_same_second(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_clock_set_tenths(7547); /* 12:34.7 */
+	assert(scoreboard_write_all_files());
+	/* Same second on disk: sub-second precision is kept */
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_clock_get_tenths() == 7547);
+	/* Clock edited externally to a different time: adopted */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/clock.txt", g_tmp_dir);
+	overwrite_file(path, "10:00");
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_clock_get_tenths() == 6000);
+	cleanup_tmp_dir();
+}
+
 static void test_write_all_files(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1816,6 +1835,7 @@ static void test_penalty_label_format_save_load(void)
 int main(void)
 {
 	test_write_all_files();
+	test_read_keeps_clock_tenths_same_second();
 	test_write_skips_unchanged_files();
 	test_write_failure_invalidates_cache();
 	test_write_cache_periodic_refresh();
