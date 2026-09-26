@@ -22,6 +22,7 @@ static const struct scoreboard_sport_preset k_sport_presets[SCOREBOARD_SPORT_COU
 	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0,   0,  0},
 	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180, 5,  3},
 	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600, 15, 13},
+	{SCOREBOARD_SPORT_FUTSAL,     "Half",    2, 1200, 2, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", true,  "Goal",  0,   0,   0,  0},
 	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300, 0,  0},
 };
 
@@ -488,28 +489,35 @@ void scoreboard_clock_set_tenths(int tenths)
 	mark_dirty();
 }
 
-void scoreboard_clock_adjust_seconds(int delta)
+/* Shift the clock by delta_tenths, clamped to [0, period_length].
+   Manual adjustments (arrow buttons / hotkeys) must never push the clock
+   past the configured segment length. If the clock is already above the
+   limit (e.g. set explicitly), an increase leaves it untouched rather
+   than pulling it down. Penalties follow the actual applied delta. */
+static void clock_adjust_tenths(int delta_tenths)
 {
 	int before = g_state.clock_tenths;
-	g_state.clock_tenths += delta * 10;
-	if (g_state.clock_tenths < 0)
-		g_state.clock_tenths = 0;
+	int max_tenths = g_state.period_length * 10;
+	int target = before + delta_tenths;
+	if (target < 0)
+		target = 0;
+	if (delta_tenths > 0 && target > max_tenths)
+		target = before > max_tenths ? before : max_tenths;
+	g_state.clock_tenths = target;
 	mark_dirty();
 	int actual_delta = g_state.clock_tenths - before;
 	if (actual_delta != 0)
 		scoreboard_penalty_adjust(actual_delta);
 }
 
+void scoreboard_clock_adjust_seconds(int delta)
+{
+	clock_adjust_tenths(delta * 10);
+}
+
 void scoreboard_clock_adjust_minutes(int delta)
 {
-	int before = g_state.clock_tenths;
-	g_state.clock_tenths += delta * 600;
-	if (g_state.clock_tenths < 0)
-		g_state.clock_tenths = 0;
-	mark_dirty();
-	int actual_delta = g_state.clock_tenths - before;
-	if (actual_delta != 0)
-		scoreboard_penalty_adjust(actual_delta);
+	clock_adjust_tenths(delta * 600);
 }
 
 void scoreboard_clock_format(char *buf, size_t size)
@@ -2271,7 +2279,7 @@ const char *scoreboard_get_cli_extra_args(void)
 
 static const char *k_sport_names[SCOREBOARD_SPORT_COUNT] = {
 	"hockey", "basketball", "soccer", "football", "lacrosse", "rugby",
-	"generic",
+	"futsal", "generic",
 };
 
 void scoreboard_set_sport(enum scoreboard_sport sport)

@@ -23,6 +23,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtGui/QClipboard>
+#include <QtGui/QColor>
 #include <QtGui/QDesktopServices>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPixmap>
@@ -33,6 +34,7 @@
 #include <QtWidgets/QAction>
 #endif
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QColorDialog>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
@@ -65,6 +67,8 @@ const char *kRecordChaptersKey = "record_chapters";
 const char *kGameClockEnabledKey = "game_clock_enabled";
 const char *kGameClockFormatKey = "game_clock_format";
 const char *kPenaltyLabelFormatKey = "penalty_label_format";
+const char *kScoreColorKey = "score_color";
+const char *kFoulsColorKey = "fouls_color";
 
 struct process_job {
 	int id = 0;
@@ -154,6 +158,10 @@ add_chapter_fn g_add_chapter = nullptr;
 get_last_recording_fn g_get_last_recording = nullptr;
 bool g_chapters_api_available = false;
 bool g_record_chapters_enabled = false;
+
+/* Dock value colors ("#rrggbb"); empty = theme default */
+QString g_score_color;
+QString g_fouls_color;
 bool g_recording_active = false;
 QElapsedTimer g_recording_timer;
 
@@ -1238,6 +1246,48 @@ void on_tick()
 		g_clock_btn->repaint();
 }
 
+/* ---- Dock value colors ---- */
+
+/* Returns a normalized "#rrggbb" string, or an empty string when the
+   input is missing/invalid (meaning "use the theme default"). */
+QString sanitize_color(const char *value)
+{
+	if (value == nullptr || value[0] == '\0')
+		return QString();
+	QColor c(QString::fromUtf8(value).trimmed());
+	return c.isValid() ? c.name() : QString();
+}
+
+/* Applies the user-selected colors to the score and foul counters in the
+   dock. Score falls back to the theme accent (QPalette::Highlight), fouls
+   fall back to the normal text color. Safe to call before the dock
+   widgets exist. */
+void apply_value_colors()
+{
+	if (g_home_score_label && g_away_score_label) {
+		QString color = g_score_color;
+		if (color.isEmpty())
+			color = g_home_score_label->palette()
+					.color(QPalette::Highlight)
+					.name();
+		const QString style =
+			"font-size: 18px; font-weight: bold; color: " + color +
+			";";
+		g_home_score_label->setStyleSheet(style);
+		g_away_score_label->setStyleSheet(style);
+	}
+	const QString foul_style =
+		g_fouls_color.isEmpty()
+			? QString()
+			: "font-weight: bold; color: " + g_fouls_color + ";";
+	QLabel *foul_labels[] = {g_home_fouls_label, g_away_fouls_label,
+				 g_home_fouls2_label, g_away_fouls2_label};
+	for (QLabel *label : foul_labels) {
+		if (label)
+			label->setStyleSheet(foul_style);
+	}
+}
+
 /* ---- Profile paths ---- */
 
 void load_profile_paths()
@@ -1271,6 +1321,12 @@ void load_profile_paths()
 			kPenaltyLabelFormatKey);
 		if (pen_fmt != nullptr && pen_fmt[0] != '\0')
 			scoreboard_set_penalty_label_format(pen_fmt);
+		const char *score_color = config_get_string(
+			profile_cfg, kConfigSection, kScoreColorKey);
+		g_score_color = sanitize_color(score_color);
+		const char *fouls_color = config_get_string(
+			profile_cfg, kConfigSection, kFoulsColorKey);
+		g_fouls_color = sanitize_color(fouls_color);
 	}
 
 	scoreboard_set_output_directory(output_dir);
@@ -1278,6 +1334,7 @@ void load_profile_paths()
 	scoreboard_set_cli_extra_args(cli_args);
 	g_environment_file =
 		env_file ? QString::fromUtf8(env_file).trimmed() : QString();
+	apply_value_colors();
 }
 
 void save_profile_paths()
@@ -1302,6 +1359,10 @@ void save_profile_paths()
 	config_set_string(profile_cfg, kConfigSection,
 			  kPenaltyLabelFormatKey,
 			  scoreboard_get_penalty_label_format());
+	config_set_string(profile_cfg, kConfigSection, kScoreColorKey,
+			  g_score_color.toUtf8().constData());
+	config_set_string(profile_cfg, kConfigSection, kFoulsColorKey,
+			  g_fouls_color.toUtf8().constData());
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1757,6 +1818,7 @@ void open_clock_settings_dialog(QWidget *parent)
 		{30, true, false, true, 0},    /* football */
 		{12, true, true, false, 5},    /* lacrosse */
 		{40, false, true, false, 15},  /* rugby */
+		{20, true, false, true, 0},    /* futsal */
 		{0, false, false, false, 0},   /* generic */
 	};
 
@@ -1945,6 +2007,70 @@ void open_clock_settings_dialog(QWidget *parent)
 	gc_fmt_row->addWidget(gc_fmt_combo, 1);
 	layout->addLayout(gc_fmt_row);
 
+	/* Dock colors — lets users pick readable colors for the score and
+	   foul counters when the theme accent color has poor contrast. */
+	QLabel *colors_header = new QLabel("<b>Dock Colors</b>", &dialog);
+	layout->addWidget(colors_header);
+
+	QString pending_score_color = g_score_color;
+	QString pending_fouls_color = g_fouls_color;
+
+	auto add_color_row = [&dialog, layout](const QString &label_text,
+					       const QString &tooltip,
+					       QString *value) {
+		QHBoxLayout *row = new QHBoxLayout();
+		row->addWidget(new QLabel(label_text, &dialog));
+		QPushButton *pick_btn = new QPushButton(&dialog);
+		pick_btn->setToolTip(tooltip);
+		pick_btn->setMinimumWidth(110);
+		QPushButton *reset_btn = new QPushButton("Default", &dialog);
+		reset_btn->setToolTip("Use the OBS theme color");
+		auto refresh = [pick_btn, reset_btn, value]() {
+			if (value->isEmpty()) {
+				pick_btn->setText("Theme default");
+				pick_btn->setStyleSheet("");
+			} else {
+				QColor c(*value);
+				QString text_color =
+					c.lightnessF() > 0.5 ? "#000000"
+							     : "#ffffff";
+				pick_btn->setText(value->toUpper());
+				pick_btn->setStyleSheet(
+					"QPushButton { background-color: " +
+					*value + "; color: " + text_color +
+					"; }");
+			}
+			reset_btn->setEnabled(!value->isEmpty());
+		};
+		refresh();
+		QObject::connect(pick_btn, &QPushButton::clicked,
+				 [&dialog, value, refresh, label_text]() {
+					 QColor initial = value->isEmpty()
+								  ? QColor(Qt::white)
+								  : QColor(*value);
+					 QColor c = QColorDialog::getColor(
+						 initial, &dialog, label_text);
+					 if (c.isValid()) {
+						 *value = c.name();
+						 refresh();
+					 }
+				 });
+		QObject::connect(reset_btn, &QPushButton::clicked,
+				 [value, refresh]() {
+					 value->clear();
+					 refresh();
+				 });
+		row->addWidget(pick_btn, 1);
+		row->addWidget(reset_btn);
+		layout->addLayout(row);
+	};
+	add_color_row("Score color:",
+		      "Color of the score numbers in the dock",
+		      &pending_score_color);
+	add_color_row("Fouls color:",
+		      "Color of the foul / card counters in the dock",
+		      &pending_fouls_color);
+
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -1988,6 +2114,9 @@ void open_clock_settings_dialog(QWidget *parent)
 		scoreboard_set_game_clock_display_format(
 			(enum scoreboard_game_clock_format)
 				gc_fmt_combo->currentIndex());
+		g_score_color = pending_score_color;
+		g_fouls_color = pending_fouls_color;
+		apply_value_colors();
 		save_profile_paths();
 		if (scoreboard_get_period_length() != prev_period_length ||
 		    scoreboard_get_clock_direction() != prev_direction)
@@ -3169,6 +3298,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	fouls2_row->addWidget(away_foul2_plus);
 	fouls2_row->addStretch(1);
 	root->addWidget(g_fouls2_row_widget);
+	apply_value_colors();
 
 	/* Penalty separator — hidden when penalties are off */
 	g_penalty_separator = new QFrame(widget);
