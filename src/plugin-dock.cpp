@@ -16,6 +16,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QProcess>
 #include <QtCore/QProcessEnvironment>
+#include <QtCore/QPointer>
 #include <QtCore/QStringList>
 #include <QtCore/QTextStream>
 #include <QtCore/QElapsedTimer>
@@ -80,7 +81,9 @@ struct process_job {
 	QPushButton *view_logs = nullptr;
 	QPushButton *copy_logs = nullptr;
 	QPushButton *cancel = nullptr;
-	QProcess *process = nullptr;
+	/* QPointer: the process is parented to the dock widget, which OBS may
+	   destroy before the module unloads */
+	QPointer<QProcess> process;
 	QString stdout_log;
 	QString stderr_log;
 	bool running = false;
@@ -132,8 +135,13 @@ QLabel *g_queue_title = nullptr;
 QFrame *g_queue_separator = nullptr;
 QScrollArea *g_queue_scroll = nullptr;
 QPushButton *g_clock_btn = nullptr;
-QTimer *g_tick_timer = nullptr;
-QFileSystemWatcher *g_file_watcher = nullptr;
+/* Guarded pointers: both objects are children of the dock widget. On OBS
+   shutdown the dock (and its children) can be destroyed before
+   obs_module_unload() runs, so raw pointers would dangle and calling
+   stop() on a deleted QTimer crashes OBS on quit (seen on macOS, OBS 32).
+   QPointer resets itself to null when the object is deleted. */
+QPointer<QTimer> g_tick_timer;
+QPointer<QFileSystemWatcher> g_file_watcher;
 QElapsedTimer g_write_cooldown;
 QElapsedTimer g_clock_elapsed;
 qint64 g_clock_remainder_ms = 0;
@@ -3773,12 +3781,14 @@ void scoreboard_dock_shutdown(void)
 	obs_frontend_remove_save_callback(save_hotkeys, nullptr);
 
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
-	obs_frontend_remove_dock(kDockId);
 
-	if (g_tick_timer) {
+	/* Stop ticking before the dock goes away. If OBS already destroyed
+	   the dock, the QPointer is null and this is skipped. */
+	if (g_tick_timer)
 		g_tick_timer->stop();
-		g_tick_timer = nullptr;
-	}
+	g_tick_timer = nullptr;
+
+	obs_frontend_remove_dock(kDockId);
 
 	g_file_watcher = nullptr;
 

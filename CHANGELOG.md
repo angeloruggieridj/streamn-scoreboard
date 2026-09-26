@@ -10,7 +10,12 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 - "Two-digit minutes" option in Game Settings — shows the clock as `09:00` instead of `9:00` (in `clock.txt` and the dock); on by default for futsal, off for other sports; remembered per OBS profile
 - Dock Colors in Game Settings — choose custom colors for the score and foul counters in the dock (the theme accent color can be hard to read); saved per OBS profile, with a "Default" button to restore the theme color
 
+### Fixed
+- OBS no longer crashes on quit (seen on macOS with OBS 32): the dock's update timer, file watcher and CLI processes are now tracked with guarded pointers, so shutdown no longer touches objects OBS has already destroyed
+- Release builds now show the release tag's version in the dock header, About dialog and plugin manager (previously always the version from `CMakeLists.txt`); set with `-DPLUGIN_VERSION_OVERRIDE`
+
 ### Changed
+- Windows CI/release builds use a new `windows-ci` preset (Ninja Multi-Config) so they work on runners with Visual Studio 2026
 - Clock +/- minute and second buttons (and hotkeys) no longer push the clock above the configured segment length (e.g. a 20:00 count-down stays capped at 20:00); running penalties only move by the time actually added
 
 ## [0.8.0] - 2026-04-17
