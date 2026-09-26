@@ -14,6 +14,12 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 - OBS no longer crashes on quit (seen on macOS with OBS 32): the dock's update timer, file watcher and CLI processes are now tracked with guarded pointers, so shutdown no longer touches objects OBS has already destroyed
 - Release builds now show the release tag's version in the dock header, About dialog and plugin manager (previously always the version from `CMakeLists.txt`); set with `-DPLUGIN_VERSION_OVERRIDE`
 
+### Improved
+- Much less disk activity while the clock runs: output files are only rewritten when their content actually changes (previously all ~27 files were rewritten every 100 ms, making every OBS Text source reload). Files deleted by hand are recreated within about 5 seconds
+- The dock no longer restyles the Start/Stop button and resets the team name fields 10 times per second
+- On OBS exit the update timer is stopped and the final state is written while the dock still exists
+- Game Settings reads sport defaults from the core preset table instead of a duplicated copy, so the two can no longer drift apart
+
 ### Changed
 - Windows CI/release builds use a new `windows-ci` preset (Ninja Multi-Config) so they work on runners with Visual Studio 2026
 - Clock +/- minute and second buttons (and hotkeys) no longer push the clock above the configured segment length (e.g. a 20:00 count-down stays capped at 20:00); running penalties only move by the time actually added

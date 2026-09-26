@@ -288,16 +288,95 @@ static void parse_penalty_files(const char *numbers_text,
 	}
 }
 
+/* ---- output file write cache ----
+   While the clock runs the state is dirty on every 100 ms tick, but most of
+   the ~27 output files (team names, score, sport, labels, ...) do not
+   change, and clock.txt itself only changes once per second. Rewriting
+   identical files wastes disk I/O and makes every OBS Text source that
+   reads from a file reload. We remember a hash of the last content written
+   to each path and skip the write when it is unchanged. The cache is
+   invalidated whenever the files may have been changed externally (read
+   back from disk), the output directory changes, a write fails, and
+   periodically, so a file deleted by hand is recreated within a few
+   seconds even if its content has not changed. */
+#define SCOREBOARD_FILE_CACHE_SIZE 64
+#define SCOREBOARD_FILE_CACHE_REFRESH_PASSES 50 /* ~5 s at 100 ms ticks */
+
+struct file_cache_entry {
+	unsigned long long path_hash;
+	unsigned long long content_hash;
+	size_t content_len;
+	bool valid;
+};
+
+static struct file_cache_entry g_file_cache[SCOREBOARD_FILE_CACHE_SIZE];
+static int g_file_cache_next = 0;
+static int g_file_cache_passes = 0;
+
+static unsigned long long fnv1a_hash(const char *text, size_t *len_out)
+{
+	unsigned long long h = 1469598103934665603ULL;
+	size_t len = 0;
+	for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+		h ^= *p;
+		h *= 1099511628211ULL;
+		len++;
+	}
+	if (len_out)
+		*len_out = len;
+	return h;
+}
+
+static void file_cache_invalidate(void)
+{
+	memset(g_file_cache, 0, sizeof(g_file_cache));
+	g_file_cache_next = 0;
+	g_file_cache_passes = 0;
+}
+
+static struct file_cache_entry *file_cache_find(unsigned long long path_hash)
+{
+	for (int i = 0; i < SCOREBOARD_FILE_CACHE_SIZE; i++) {
+		if (g_file_cache[i].valid &&
+		    g_file_cache[i].path_hash == path_hash)
+			return &g_file_cache[i];
+	}
+	return NULL;
+}
+
 static bool write_text_file(const char *dir, const char *filename,
 			    const char *content)
 {
 	char path[1024];
 	snprintf(path, sizeof(path), "%s/%s", dir, filename);
+
+	unsigned long long path_hash = fnv1a_hash(path, NULL);
+	size_t content_len = 0;
+	unsigned long long content_hash = fnv1a_hash(content, &content_len);
+	struct file_cache_entry *entry = file_cache_find(path_hash);
+	if (entry != NULL && entry->content_hash == content_hash &&
+	    entry->content_len == content_len)
+		return true; /* unchanged since our last write */
+
 	FILE *f = fopen(path, "w");
-	if (f == NULL)
+	if (f == NULL) {
+		/* The directory may be gone: forget everything so all files
+		   are recreated once writing works again */
+		file_cache_invalidate();
 		return false;
+	}
 	fprintf(f, "%s", content);
 	fclose(f);
+
+	if (entry == NULL) {
+		entry = &g_file_cache[g_file_cache_next];
+		g_file_cache_next =
+			(g_file_cache_next + 1) % SCOREBOARD_FILE_CACHE_SIZE;
+	}
+	entry->path_hash = path_hash;
+	entry->content_hash = content_hash;
+	entry->content_len = content_len;
+	entry->valid = true;
 	return true;
 }
 
@@ -391,6 +470,7 @@ void scoreboard_on_unload(scoreboard_log_fn log_fn)
 void scoreboard_reset_state_for_tests(void)
 {
 	memset(&g_state, 0, sizeof(g_state));
+	file_cache_invalidate();
 	g_dirty = false;
 	g_event_count = 0;
 	memset(g_event_log, 0, sizeof(g_event_log));
@@ -1761,6 +1841,7 @@ void scoreboard_set_output_directory(const char *path)
 {
 	safe_copy(g_state.output_directory, path,
 		  sizeof(g_state.output_directory));
+	file_cache_invalidate();
 }
 
 const char *scoreboard_get_output_directory(void)
@@ -1776,6 +1857,9 @@ bool scoreboard_write_all_files(void)
 	const char *dir = g_state.output_directory;
 	if (dir[0] == '\0')
 		return false;
+
+	if (++g_file_cache_passes >= SCOREBOARD_FILE_CACHE_REFRESH_PASSES)
+		file_cache_invalidate();
 
 	char buf[64];
 	bool ok = true;
@@ -1892,6 +1976,9 @@ bool scoreboard_read_all_files(void)
 	const char *dir = g_state.output_directory;
 	if (dir[0] == '\0')
 		return false;
+
+	/* Files may have been edited externally: never trust the cache */
+	file_cache_invalidate();
 
 	char buf[512];
 	bool ok = true;
@@ -2390,6 +2477,14 @@ enum scoreboard_sport scoreboard_get_sport(void)
 const struct scoreboard_sport_preset *scoreboard_get_sport_preset(void)
 {
 	return &k_sport_presets[g_state.sport];
+}
+
+const struct scoreboard_sport_preset *
+scoreboard_get_preset_for_sport(enum scoreboard_sport sport)
+{
+	if (sport < 0 || sport >= SCOREBOARD_SPORT_COUNT)
+		sport = SCOREBOARD_SPORT_HOCKEY;
+	return &k_sport_presets[sport];
 }
 
 const char *scoreboard_sport_name(enum scoreboard_sport sport)

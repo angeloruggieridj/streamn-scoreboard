@@ -890,7 +890,13 @@ void update_all_labels()
 			g_highlights_btn->setEnabled(!clock_running);
 		if (g_period_adv_btn)
 			g_period_adv_btn->setEnabled(!clock_running);
-		if (clock_running) {
+		/* setStyleSheet() re-polishes the widget; this runs every
+		   100 ms, so only restyle when the running state flips */
+		static int s_styled_running = -1;
+		if (s_styled_running == (clock_running ? 1 : 0)) {
+			/* unchanged */
+		} else if (clock_running) {
+			s_styled_running = 1;
 			QPalette p = g_clock_btn->palette();
 			QColor base = p.color(QPalette::Button);
 			QColor red = QColor::fromHslF(0.0, 0.7,
@@ -901,6 +907,7 @@ void update_all_labels()
 				+ p.color(QPalette::BrightText).name()
 				+ ";");
 		} else {
+			s_styled_running = 0;
 			g_clock_btn->setStyleSheet("");
 		}
 	}
@@ -968,12 +975,20 @@ void update_all_labels()
 	if (g_penalty_separator)
 		g_penalty_separator->setVisible(
 			scoreboard_get_has_penalties());
-	if (g_home_name_edit && !g_home_name_edit->hasFocus())
-		g_home_name_edit->setText(
-			QString::fromUtf8(scoreboard_get_home_name()));
-	if (g_away_name_edit && !g_away_name_edit->hasFocus())
-		g_away_name_edit->setText(
-			QString::fromUtf8(scoreboard_get_away_name()));
+	/* QLineEdit::setText() resets cursor and undo history even when the
+	   text is identical, so only update when the name really changed */
+	if (g_home_name_edit && !g_home_name_edit->hasFocus()) {
+		const QString name =
+			QString::fromUtf8(scoreboard_get_home_name());
+		if (g_home_name_edit->text() != name)
+			g_home_name_edit->setText(name);
+	}
+	if (g_away_name_edit && !g_away_name_edit->hasFocus()) {
+		const QString name =
+			QString::fromUtf8(scoreboard_get_away_name());
+		if (g_away_name_edit->text() != name)
+			g_away_name_edit->setText(name);
+	}
 	if (g_home_score_label)
 		g_home_score_label->setText(
 			QString::number(scoreboard_get_home_score()));
@@ -1838,25 +1853,6 @@ void open_clock_settings_dialog(QWidget *parent)
 	str_label_input->setVisible(str_section_visible);
 	str_preview_label->setVisible(str_section_visible);
 
-	/* Preset duration/direction/features per sport (mirrors core table) */
-	struct sport_ui_info {
-		int duration_min;
-		bool count_down;
-		bool has_penalties;
-		bool has_fouls;
-		int base_strength;
-		bool pad_minutes;
-	};
-	static const sport_ui_info k_sport_ui[SCOREBOARD_SPORT_COUNT] = {
-		{15, true, true, false, 5, false},    /* hockey */
-		{8, true, false, true, 0, false},     /* basketball */
-		{45, false, false, true, 11, false},  /* soccer */
-		{30, true, false, true, 0, false},    /* football */
-		{12, true, true, false, 5, false},    /* lacrosse */
-		{40, false, true, false, 15, false},  /* rugby */
-		{20, true, false, true, 0, true},    /* futsal */
-		{0, false, false, false, 0, false},   /* generic */
-	};
 
 	/* Update dialog fields when sport changes */
 	QObject::connect(
@@ -1869,25 +1865,31 @@ void open_clock_settings_dialog(QWidget *parent)
 		 str_preview_label, pad_minutes_check](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
-			const sport_ui_info &info = k_sport_ui[index];
-			if (info.duration_min > 0)
-				len_spin->setValue(info.duration_min);
-			if (info.count_down) {
+			/* Read defaults straight from the core preset table so
+			   the dialog can never drift from the core */
+			const struct scoreboard_sport_preset *preset =
+				scoreboard_get_preset_for_sport(
+					(enum scoreboard_sport)index);
+			if (preset->duration_seconds > 0)
+				len_spin->setValue(preset->duration_seconds /
+						   60);
+			if (preset->default_direction ==
+			    SCOREBOARD_CLOCK_COUNT_DOWN) {
 				down_btn->setChecked(true);
 				up_btn->setChecked(false);
 			} else {
 				up_btn->setChecked(true);
 				down_btn->setChecked(false);
 			}
-			pen_dur_label->setVisible(info.has_penalties);
-			pen_dur_spin->setVisible(info.has_penalties);
-			major_pen_dur_label->setVisible(info.has_penalties);
-			major_pen_dur_spin->setVisible(info.has_penalties);
-			pen_label_header->setVisible(info.has_penalties);
-			pen_label_label->setVisible(info.has_penalties);
-			pen_label_input->setVisible(info.has_penalties);
-			pen_preview_label->setVisible(info.has_penalties);
-			bool show_strength = info.base_strength > 0;
+			pen_dur_label->setVisible(preset->has_penalties);
+			pen_dur_spin->setVisible(preset->has_penalties);
+			major_pen_dur_label->setVisible(preset->has_penalties);
+			major_pen_dur_spin->setVisible(preset->has_penalties);
+			pen_label_header->setVisible(preset->has_penalties);
+			pen_label_label->setVisible(preset->has_penalties);
+			pen_label_input->setVisible(preset->has_penalties);
+			pen_preview_label->setVisible(preset->has_penalties);
+			bool show_strength = preset->base_strength > 0;
 			strength_label->setVisible(show_strength);
 			strength_spin->setVisible(show_strength);
 			str_label_header->setVisible(show_strength);
@@ -1895,8 +1897,8 @@ void open_clock_settings_dialog(QWidget *parent)
 			str_label_input->setVisible(show_strength);
 			str_preview_label->setVisible(show_strength);
 			if (show_strength)
-				strength_spin->setValue(info.base_strength);
-			pad_minutes_check->setChecked(info.pad_minutes);
+				strength_spin->setValue(preset->base_strength);
+			pad_minutes_check->setChecked(preset->pad_clock_minutes);
 		});
 
 	/* Period labels button */
@@ -2855,6 +2857,15 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		update_all_labels();
 		update_highlights_button_visibility();
 		update_copy_timestamps_visibility();
+	}
+	/* OBS is quitting: stop the tick timer now, while the dock still
+	   exists, and flush the final state to disk. */
+	if (event == OBS_FRONTEND_EVENT_EXIT) {
+		if (g_tick_timer)
+			g_tick_timer->stop();
+		if (scoreboard_is_dirty())
+			write_files_now();
+		return;
 	}
 	/* OBS frontend events and Qt button/hotkey callbacks all run on the
 	   main (Qt) thread, so g_stream_active and g_stream_timer are safe

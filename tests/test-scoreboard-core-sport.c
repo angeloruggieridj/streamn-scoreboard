@@ -389,6 +389,27 @@ static void test_non_futsal_fouls_not_reset(void)
 	assert(scoreboard_get_away_fouls() == 3);
 }
 
+static void test_get_preset_for_sport(void)
+{
+	const struct scoreboard_sport_preset *p =
+		scoreboard_get_preset_for_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(p->sport == SCOREBOARD_SPORT_FUTSAL);
+	assert(p->duration_seconds == 1200);
+	assert(p->pad_clock_minutes == true);
+	p = scoreboard_get_preset_for_sport(SCOREBOARD_SPORT_SOCCER);
+	assert(p->sport == SCOREBOARD_SPORT_SOCCER);
+	/* Every entry sits at its own enum index */
+	for (int i = 0; i < SCOREBOARD_SPORT_COUNT; i++)
+		assert(scoreboard_get_preset_for_sport(
+			       (enum scoreboard_sport)i)->sport ==
+		       (enum scoreboard_sport)i);
+	/* Invalid values fall back to hockey */
+	assert(scoreboard_get_preset_for_sport((enum scoreboard_sport)-1)
+		       ->sport == SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_preset_for_sport((enum scoreboard_sport)99)
+		       ->sport == SCOREBOARD_SPORT_HOCKEY);
+}
+
 static void test_set_sport_invalid(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1026,6 +1047,7 @@ int main(void)
 	test_futsal_saved_fouls_cleared();
 	test_futsal_saved_fouls_persist_json();
 	test_non_futsal_fouls_not_reset();
+	test_get_preset_for_sport();
 	test_set_sport_invalid();
 	test_sport_name_round_trip();
 	test_sport_from_name_null();

@@ -247,6 +247,9 @@ const char *scoreboard_get_cli_extra_args(void);
 void scoreboard_set_sport(enum scoreboard_sport sport);
 enum scoreboard_sport scoreboard_get_sport(void);
 const struct scoreboard_sport_preset *scoreboard_get_sport_preset(void);
+/* Preset table entry for any sport (invalid values fall back to hockey) */
+const struct scoreboard_sport_preset *
+scoreboard_get_preset_for_sport(enum scoreboard_sport sport);
 const char *scoreboard_sport_name(enum scoreboard_sport sport);
 enum scoreboard_sport scoreboard_sport_from_name(const char *name);
 const char *scoreboard_get_segment_name(void);
